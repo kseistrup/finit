@@ -1,0 +1,369 @@
+#!/usr/bin/env python2
+# -*- mode: python; coding: utf-8 -*-
+"""
+Usage: finit [OPTIONS] [FOO=BAR]...
+  Options are:
+    -dD, --delimiter=D ..... use 'D' instead of '$' for field delimiter
+    -e,  --environment ..... use environment variables as keys
+"""
+_doc_yaml = """\
+    -fY, --config=Y ........ read defaults from Y (default: ~/.finit/defaults)
+    -n,  --no-defaults ..... start with a clear slate by not reading defaults
+    -y,  --dump-yaml ....... print mapping in YAML format, then exit
+"""
+_doc_extra = """\
+    -h,  --help ............ show this help text and exit
+    -v,  --version ......... print version information and exit
+    -c,  --copyright ....... show copying policy and exit
+
+This filter replaces all occurrences of '${FOO}' with 'BAR',
+where FOO and BAR are taken from commandline argument 'FOO=BAR'.
+
+If the Python YAML module is available, finit will attempt to read default
+values from the YAML formatted file ~/.finit/defaults.
+"""
+##############################################################################
+# This program is free software; you can redistribute it and/or modify it    #
+# under the terms of the GNU General Public License as published by the Free #
+# Software Foundation; either version 3 of the License, or (at your option)  #
+# any later version.                                                         #
+#                                                                            #
+# This program is distributed in the hope that it will be useful, but with-  #
+# out any warranty; without even the implied warranty of merchantability or  #
+# fitness for a particular purpose.  See the GNU General Public License for  #
+# more details.  <http://gplv3.fsf.org/>                                     #
+##############################################################################
+
+__version__     = '0.3.2'
+__revision__    = '2011-01-01'
+__author__      = 'Klaus Alexander Seistrup <kas+finit@magnetic-ink.dk>'
+
+__copyright__   = """finit %s (%s)
+Copyright (C) 2005-2011 Klaus Alexander Seistrup <klaus@seistrup.dk>
+
+This is free software; see the source for copying conditions.  There is no
+warranty; not even for merchantability or fitness for a particular purpose.""" % (
+    __version__, __revision__
+)
+
+import sys
+import os
+import getopt
+
+from sys import stdin, stdout, stderr
+from string import Template
+
+try:
+    import yaml
+    HAS_YAML = True
+    __doc__ += _doc_yaml
+except ImportError:
+    HAS_YAML = False
+# end try
+__doc__ += _doc_extra
+
+ME = 'finit'
+
+class MyError(Exception):
+    def __init__(self, msg):
+        self.msg = msg
+    # end def __init__
+# end class MyError
+
+options = {
+    # Specific options
+    'd:': 'delimiter=',
+    'e' : 'environment',
+    'q' : 'quiet',
+    # Generic options
+    'c' : 'copyright',
+    'h' : 'help',
+    'v' : 'version',
+}
+if HAS_YAML:
+    options.update({'f:': 'config=', 'n': 'no-defaults', 'y': 'dump-yaml'})
+# end if
+
+xopts = ['verbose', 'copyleft', 'copying']
+sopts = ''.join(options.keys())
+lopts = options.values()
+
+FINITRC = os.path.expanduser(
+    os.environ.get(
+        'FINIT_DEFAULTS',
+        os.path.join('~', '.config', 'finit', 'defaults')
+    )
+)
+
+def read_defaults(fileName):
+    """defaults = read_defaults(fileName)"""
+    defaults = {}
+    if HAS_YAML:
+        defvals = None
+        if os.path.exists(fileName):
+            try:
+                try:
+                    fp = file(fileName, 'rU')
+                    defvals = yaml.load(fp)
+                    dummy = fp.close()
+                except IOError, errMsg:
+                    raise MyError(errMsg)
+                except:
+                    raise MyError("%s: Cannot read file '%s'." % (ME, fileName))
+                # end try
+            except MyError, msg:
+                print >>stderr, msg
+                sys.exit(1)
+            # end try
+        else:
+            if fileName != FINITRC:
+                print >>stderr, "%s: Error: No such file: '%s'." % (ME, fileName)
+                sys.exit(1)
+            # end if
+        # end if
+        dvtype = type(defvals)
+        if dvtype == type({}):
+            defaults.update(defvals)
+        elif defvals is not None:
+            print >>stderr, "%s: Warning: Syntax error in YAML file '%s'?" % (ME, fileName)
+            print >>stderr, 'Expected mapping/dictionary, found %s.' % (str(dvtype)[1:-1],)
+            sys.exit(1)
+        # end if
+    # end if
+    return defaults
+# end def read_defaults
+
+def timeanddate():
+    from datetime import datetime
+    now = datetime.now()
+    utc = datetime.utcnow()
+    f = now.strftime
+    u = utc.strftime
+    return dict(
+        ISODATETIME=f('%FT%T'),
+        ISODATE=f('%F'),
+        ISOTIME=f('%T'),
+        ISOWEEK=f('%V'),
+        ABBRDOW=f('%a'),
+        FULLDOW=f('%A'),
+        ABBRMONTH=f('%b'),
+        FULLMONTH=f('%B'),
+        HOUR24=f('%H'),
+        HOUR12=f('%I'),
+        HHMM24=f('%R'),
+        MINUTE=f('%M'),
+        SECOND=f('%S'),
+        YEAR=f('%Y'),
+        EPOCH=f('%s'),
+        DAY=f('%d'),
+        MONTH=f('%m'),
+        JULIAN=f('%j'),
+        UTCISODATETIME=u('%FT%T'),
+        UTCISODATE=u('%F'),
+        UTCISOTIME=u('%T'),
+        UTCISOWEEK=u('%V'),
+        UTCABBRDOW=u('%a'),
+        UTCFULLDOW=u('%A'),
+        UTCABBRMONTH=u('%b'),
+        UTCFULLMONTH=u('%B'),
+        UTCHOUR24=u('%H'),
+        UTCHOUR12=u('%I'),
+        UTCHHMM24=u('%R'),
+        UTCMINUTE=u('%M'),
+        UTCSECOND=u('%S'),
+        UTCYEAR=u('%Y'),
+        UTCEPOCH=u('%s'),
+        UTCDAY=u('%d'),
+        UTCMONTH=u('%m'),
+        UTCJULIAN=u('%j')
+    )
+# end def timeanddate
+    
+# Main entry point
+def main(argv=None):
+    global ME, stderr
+
+    if argv is None:
+        argv = sys.argv
+    # end if
+
+    me = os.path.basename(argv[0])
+    while me[-3:] == '.py':
+        me = me[:-3]
+    # end while
+    ME = me
+
+    try:
+        try:
+            (opts, args) = getopt.getopt(argv[1:], sopts, lopts)
+        except getopt.error, msg:
+            raise MyError(msg)
+        # end try
+    except MyError, err:
+        print >>stderr, err.msg
+        print >>stderr, "Try '%s --help' for more information." % (me,)
+        return 1
+    # end try
+    
+    delim = '$'
+    environment = dict(os.environ)
+    dictionary = timeanddate()
+    yamlfiles = []
+    nodefaults = False
+    verbose = False
+    dump_yaml = False
+
+    # Loop through options
+    for (opt, arg) in opts:
+        if   opt in ('-d', '--delimiter'):
+            delim = arg
+        elif opt in ('-f', '--config'):
+            if HAS_YAML:
+                yamlfiles.append(arg)
+            else:
+                print >>stderr, '%s: Error: Option %s requires the YAML module' % (me, opt)
+            # end if
+        elif opt in ('-n', '--no-defaults'):
+            dictionary = {}
+            yamlfiles = []
+            nodefaults = True
+        elif opt in ('-e', '--environment'):
+            dictionary.update(environment)
+        elif opt in ('--verbose',):
+            verbose = True
+        elif opt in ('-y', '--dump-yaml'):
+            if HAS_YAML:
+                dump_yaml = True
+            else:
+                print >>stderr, '%s: Error: Option %s requires the YAML module' % (me, opt)
+            # end if
+        elif opt in ('-h', '--help'):
+            print __doc__
+            return 0
+        elif opt in ('-c', '--copyright'):
+            print __copyright__
+            return 0
+        elif opt in ('-v', '--version'):
+            if me != 'finit':
+                print 'finit/%s (%s) %s' % (__version__, __revision__, me)
+            else:
+                print 'finit/%s (%s)' % (__version__, __revision__)
+            # end if
+            return 0
+        elif opt in ('-q', '--quiet'):
+            # FIXME: How to make this portable?
+            if sys.platform != 'win32':
+                try:
+                    # FIXME: Use logging instead
+                    stderr = file('/dev/null', 'w')
+                except:
+                    pass
+                # end try
+            # end if
+        else:
+            print >>stderr, "Try '%s --help' for more information." % (me,)
+            return 1
+        # end if
+    # end for
+
+    if HAS_YAML:
+        if nodefaults == False:
+            if not yamlfiles:
+                yamlfiles = [FINITRC]
+            # end if
+            for file in yamlfiles:
+                dictionary.update(read_defaults(file))
+            # end for
+        # end if
+    # end if
+
+    # Loop through remaining arguments
+    for arg in args:
+        (key, val) = (arg.split('=',1)+['',None])[:2]
+        key = key.strip()
+        if not key or val is None:
+            print >>stderr, "%s: Invalid argument '%s', please use 'foo=bar'." % (me, arg)
+            return 1
+        # end if
+        if dictionary.has_key(key) and verbose:
+            if dictionary[key] == val:
+                print >>stderr, "%s: Warning: Ignoring duplicate parameters '%s=%s'." % (me, key, val)
+                continue
+            else:
+                print >>stderr, "%s: Warning: Redefinition of key '%s' from '%s' to '%s'." % (me, key, dictionary[key], val)
+            # end if
+        # end if
+        dictionary[key] = val
+    # end for
+
+    if dump_yaml:
+        print yaml.safe_dump(
+            dictionary,
+            version=(1,2),
+            explicit_start=True,
+            explicit_end=True,
+            default_flow_style=False
+        ),
+        return 0
+    # end if
+
+    class MyTemplate(Template):
+        delimiter = delim
+    # end class MyTemplate
+
+    try:
+        try:
+            template = MyTemplate(stdin.read())
+        except IOError, msg:
+            raise MyError(msg)
+        except TypeError, msg:
+            raise MyError(msg)
+        except:
+            raise MyError('Error creating template from standard input')
+        # end try
+    except MyError, err:
+        print >>stderr, '%s: %s.' % (me, err.msg)
+        return 1
+    # end try
+
+    try:
+        try:
+            document = template.safe_substitute(dictionary)
+        except KeyError, msg:
+            raise MyError(msg)
+        except ValueError, msg:
+            raise MyError(msg)
+        # end try
+    except MyError, err:
+        print >>stderr, err.msg
+        return 1
+    # end if
+
+    try:
+        try:
+            stdout.write(document)
+        except IOError, msg:
+            raise MyError(msg)
+        except:
+            raise MyError('%s: Cannot write final document to standard output.' % (me,))
+        # end try
+    except MyError, err:
+        print >>stderr, err.msg
+        return 1
+    # end try
+
+    # End of road
+    return 0
+# end def main
+
+if __name__ == '__main__':
+    try:
+        from locale import setlocale, LC_ALL
+        dummy = setlocale(LC_ALL, '')
+    except:
+        pass
+    # end try
+    sys.exit(main(sys.argv))
+# end if
+
+# eof
